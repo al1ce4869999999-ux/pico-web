@@ -19,7 +19,7 @@
 <p id="status" role="status">画像を選ぶと変換できます。</p>
 <div id="toolbox"><label for="brush">タッチ修正</label><select id="brush"><option value="off">オフ</option><option value="draw">描く</option><option value="erase">消しゴム</option></select><button id="undo" class="secondary" disabled>元に戻す</button></div>
 <div id="palette" aria-label="パレット"></div><div class="actions"><button id="save" disabled>原寸PNG</button><button id="save4" disabled>4倍PNG</button><button id="reset" class="secondary" disabled>再変換</button></div>
-<small>パレットから色を選び、「描く」でドットを修正。編集後の保存にも対応。</small>
+<small>パレットから色を選び、「描く」でドットを修正。編集後の保存にも対応。</small><hr><h2>Animation Studio</h2><label for="motion">モーション</label><select id="motion"><option value="bounce">ぽよぽよ</option><option value="sway">ゆらゆら</option><option value="float">ふわふわ</option></select><label for="speed">速さ <output id="speedValue">6</output></label><input id="speed" type="range" min="2" max="12" value="6"><div class="view"><canvas id="animation" width="64" height="64" aria-label="アニメーションプレビュー"></canvas></div><div class="actions"><button id="toggleAnimation">アニメ停止</button><button id="sheet" disabled>8コマ画像を保存</button></div><small>キャラクター全体を動かす初期版です。背景付き画像は背景も一緒に動きます。目や耳の独立アニメーションは今後追加します。</small>
 </section></main>
 <script>
 "use strict";
@@ -66,7 +66,7 @@ for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4;if(!before[i+3])conti
 const edge= (x===0||x===w-1||y===0||y===h-1)||[[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([xx,yy])=>before[(yy*w+xx)*4+3]===0);
 if(edge){for(let c=0;c<3;c++)result[i+c]=clamp(before[i+c]*factor)}}}
 canvas.width=w;canvas.height=h;pixels=new ImageData(result,w,h);undo=[];paint();drawPalette();
-$("undo").disabled=true;$("save").disabled=$("save4").disabled=$("reset").disabled=false;
+$("undo").disabled=true;$("save").disabled=$("save4").disabled=$("reset").disabled=$("sheet").disabled=false;
 $("status").textContent=w+" × "+h+"px • "+palette.length+" 色"+(tiny?" • ちび補正ON":"")+" • 端末内で変換済み";
 }
 function paint(){if(pixels)ctx.putImageData(pixels,0,0)}
@@ -78,5 +78,38 @@ canvas.addEventListener("pointermove",e=>{if(painting)at(e)});["pointerup","poin
 $("undo").onclick=()=>{if(!undo.length||!pixels)return;pixels.data.set(undo.pop());paint();$("undo").disabled=undo.length===0};
 $("reset").onclick=render;
 function download(scale){if(!pixels)return;const c=document.createElement("canvas");c.width=canvas.width*scale;c.height=canvas.height*scale;const q=c.getContext("2d");q.imageSmoothingEnabled=false;q.drawImage(canvas,0,0,c.width,c.height);c.toBlob(blob=>{if(!blob)return;const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="pico-"+canvas.width+"x"+canvas.height+(scale===1?"":"-4x")+".png";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000)},"image/png")}
+
 $("save").onclick=()=>download(1);$("save4").onclick=()=>download(4);
+const anim=$("animation"),ac=anim.getContext("2d"),frame=document.createElement("canvas"),fc=frame.getContext("2d");
+let playing=true,startTime=performance.now();
+function drawMotion(target,phase,mode,base){
+const w=base.width,h=base.height,targetCtx=target.getContext("2d");
+targetCtx.clearRect(0,0,target.width,target.height);
+targetCtx.imageSmoothingEnabled=false;
+let dx=0,dy=0,angle=0;
+if(mode==="bounce")dy=-Math.round((1-Math.cos(phase*2*Math.PI))*Math.max(1,h*.035));
+if(mode==="float")dy=Math.round(Math.sin(phase*2*Math.PI)*Math.max(1,h*.035));
+if(mode==="sway"){dx=Math.round(Math.sin(phase*2*Math.PI)*Math.max(1,w*.025));angle=Math.sin(phase*2*Math.PI)*.035;}
+targetCtx.save();targetCtx.translate(target.width/2+dx,target.height/2+dy);
+targetCtx.rotate(angle);targetCtx.drawImage(base,-w/2,-h/2);targetCtx.restore();
+}
+function animationTick(now){
+if(pixels){if(anim.width!==canvas.width||anim.height!==canvas.height){anim.width=canvas.width;anim.height=canvas.height;}
+if(playing){const duration=1800-Number($("speed").value)*110;drawMotion(anim,((now-startTime)%duration)/duration,$("motion").value,canvas);}
+}else{ac.clearRect(0,0,anim.width,anim.height);}
+requestAnimationFrame(animationTick);
+}
+requestAnimationFrame(animationTick);
+$("toggleAnimation").onclick=()=>{playing=!playing;$("toggleAnimation").textContent=playing?"アニメ停止":"アニメ再生";if(playing)startTime=performance.now()};
+$("speed").oninput=()=>{$("speedValue").textContent=$("speed").value;startTime=performance.now()};
+$("motion").onchange=()=>{startTime=performance.now();if(!playing&&pixels)drawMotion(anim,0,$("motion").value,canvas)};
+$("sheet").onclick=()=>{
+if(!pixels)return;
+const count=8,w=canvas.width,h=canvas.height,strip=document.createElement("canvas");
+strip.width=w*count;strip.height=h;
+const sc=strip.getContext("2d");sc.imageSmoothingEnabled=false;
+frame.width=w;frame.height=h;
+for(let i=0;i<count;i++){drawMotion(frame,i/count,$("motion").value,canvas);sc.drawImage(frame,i*w,0);}
+strip.toBlob(blob=>{if(!blob)return;const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="pico-"+$("motion").value+"-8frames.png";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000)},"image/png");
+};
 </script></body></html>
