@@ -6,14 +6,14 @@
 <header><h1>pico. ✦</h1><p>イラストをゲーム用スプライトに。減色・細部保護・ドット単位の修正まで、画像は端末内で処理。</p></header>
 <main><section>
 <label class="upload">画像を読み込む<input id="file" type="file" accept="image/*"></label>
-<div class="presets"><button data-preset="character">キャラクター</button><button data-preset="retro">レトロ</button><button data-preset="soft">やわらか</button></div>
-<label for="size">長辺 <output id="sizeValue">64</output>px</label><input id="size" type="range" min="16" max="192" value="64" step="8">
+<div class="presets"><button data-preset="character">キャラクター</button><button data-preset="retro">レトロ</button><button data-preset="soft">やわらか</button><button data-preset="tiny">ちびスプライト</button></div>
+<label for="tiny">ちびスプライト補正</label><select id="tiny"><option value="off">オフ</option><option value="on">オン（小さい顔を強調）</option></select><label for="size">長辺 <output id="sizeValue">64</output>px</label><input id="size" type="range" min="16" max="192" value="64" step="8">
 <label for="colors">パレット <output id="colorsValue">20</output>色</label><input id="colors" type="range" min="4" max="48" value="20">
 <label for="detail">細部の保持 <output id="detailValue">65</output>%</label><input id="detail" type="range" min="0" max="100" value="65">
 <label for="contrast">色のメリハリ <output id="contrastValue">14</output>%</label><input id="contrast" type="range" min="0" max="50" value="14">
 <label for="dither">ディザ</label><select id="dither"><option value="off">なし（キャラ向け）</option><option value="ordered">控えめ</option><option value="strong">レトロ</option></select>
 <label for="outline">輪郭補強</label><select id="outline"><option value="soft">弱め</option><option value="none">なし</option><option value="bold">強め</option></select>
-<small>※ 顔パーツを認識するAIではありません。画像の局所コントラストを利用して、細い線を残しやすくします。</small>
+<small>※ AIによる顔検出ではありません。ちび補正は画像の中央上部を顔の候補として扱い、細部とコントラストを優先します。顔が端にある構図ではオフにしてください。</small>
 </section><section><h2>プレビュー</h2>
 <div class="view"><canvas id="preview" width="64" height="64" aria-label="ドット絵プレビュー"></canvas></div>
 <p id="status" role="status">画像を選ぶと変換できます。</p>
@@ -27,8 +27,8 @@ const $=id=>document.getElementById(id);
 const canvas=$("preview"),ctx=canvas.getContext("2d",{willReadFrequently:true});
 const source=new Image();let ready=false, pixels=null, undo=[], palette=[], selected=0,painting=false,activeURL=null;
 const clamp=v=>Math.max(0,Math.min(255,Math.round(v)));
-const controls=["size","colors","detail","contrast","dither","outline"];
-const presets={character:{size:64,colors:20,detail:75,contrast:18,dither:"off",outline:"soft"},retro:{size:48,colors:12,detail:50,contrast:26,dither:"strong",outline:"bold"},soft:{size:96,colors:32,detail:45,contrast:8,dither:"off",outline:"none"}};
+const controls=["size","colors","detail","contrast","dither","outline","tiny"];
+const presets={character:{size:64,colors:20,detail:75,contrast:18,dither:"off",outline:"soft",tiny:"off"},retro:{size:48,colors:12,detail:50,contrast:26,dither:"strong",outline:"bold",tiny:"off"},soft:{size:96,colors:32,detail:45,contrast:8,dither:"off",outline:"none",tiny:"off"},tiny:{size:32,colors:16,detail:85,contrast:23,dither:"off",outline:"soft",tiny:"on"}};
 document.querySelectorAll("[data-preset]").forEach(b=>b.onclick=()=>{Object.assign($("size"),{value:presets[b.dataset.preset].size});for(const [k,v] of Object.entries(presets[b.dataset.preset]))$(k).value=v;render()});
 $("file").onchange=e=>{const f=e.target.files?.[0];if(!f)return;if(activeURL)URL.revokeObjectURL(activeURL);activeURL=URL.createObjectURL(f);source.onload=()=>{ready=true;render()};source.onerror=()=>{$("status").textContent="画像を読み込めませんでした。";ready=false};source.src=activeURL};
 controls.forEach(id=>$(id).addEventListener("input",render));
@@ -44,7 +44,7 @@ function render(){
 for(const key of ["size","colors","detail","contrast"])$(key+"Value").textContent=$(key).value;
 if(!ready||!source.naturalWidth)return;
 const size=+$("size").value,detail=+$("detail").value/100,contrast=+$("contrast").value/100;
-const aspect=source.naturalWidth/source.naturalHeight;
+const tiny=$("tiny").value==="on";const aspect=source.naturalWidth/source.naturalHeight;
 const w=aspect>=1?size:Math.max(1,Math.round(size*aspect)),h=aspect>=1?Math.max(1,Math.round(size/aspect)):size;
 const hi=document.createElement("canvas");hi.width=w*3;hi.height=h*3;const hc=hi.getContext("2d",{willReadFrequently:true});hc.imageSmoothingQuality="high";hc.drawImage(source,0,0,hi.width,hi.height);
 const HD=hc.getImageData(0,0,hi.width,hi.height).data;
@@ -54,7 +54,7 @@ for(let y=0;y<h;y++)for(let x=0;x<w;x++){const j=(y*w+x)*4;
 let sum=[0,0,0],min=[255,255,255],max=[0,0,0],n=0,alpha=0;
 for(let yy=0;yy<3;yy++)for(let xx=0;xx<3;xx++){const i=((y*3+yy)*hi.width+x*3+xx)*4,a=HD[i+3]/255;if(a<.25)continue;n++;alpha+=a;for(let c=0;c<3;c++){sum[c]+=HD[i+c];min[c]=Math.min(min[c],HD[i+c]);max[c]=Math.max(max[c],HD[i+c])}}
 if(n===0){d[j+3]=0;continue}d[j+3]=alpha/n>0.45?255:0;
-for(let c=0;c<3;c++){const avg=sum[c]/n;let value=avg;if(detail>0){const mid=HD[((y*3+1)*hi.width+x*3+1)*4+c];const edge=max[c]-min[c];const weight=detail*Math.min(1,edge/110);value=avg*(1-weight)+mid*weight}d[j+c]=clamp((value-127.5)*(1+contrast)+127.5)}}
+for(let c=0;c<3;c++){const avg=sum[c]/n;let value=avg;if(detail>0){const mid=HD[((y*3+1)*hi.width+x*3+1)*4+c];const edge=max[c]-min[c];const faceZone=tiny&&x/w>.19&&x/w<.81&&y/h>.12&&y/h<.66;const weight=Math.min(.92,(detail+(faceZone?.13:0))*Math.min(1,edge/(faceZone?64:110)));value=avg*(1-weight)+mid*weight}const faceZone=tiny&&x/w>.19&&x/w<.81&&y/h>.12&&y/h<.66;d[j+c]=clamp((value-127.5)*(1+contrast+(faceZone?.13:0))+127.5)}}
 palette=makePalette(d,+$("colors").value);
 const matrix=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]],amount=$("dither").value==="strong"?12:$("dither").value==="ordered"?4:0;
 const result=new Uint8ClampedArray(d);
@@ -67,7 +67,7 @@ const edge= (x===0||x===w-1||y===0||y===h-1)||[[x-1,y],[x+1,y],[x,y-1],[x,y+1]].
 if(edge){for(let c=0;c<3;c++)result[i+c]=clamp(before[i+c]*factor)}}}
 canvas.width=w;canvas.height=h;pixels=new ImageData(result,w,h);undo=[];paint();drawPalette();
 $("undo").disabled=true;$("save").disabled=$("save4").disabled=$("reset").disabled=false;
-$("status").textContent=w+" × "+h+"px • "+palette.length+" 色 • 端末内で変換済み";
+$("status").textContent=w+" × "+h+"px • "+palette.length+" 色"+(tiny?" • ちび補正ON":"")+" • 端末内で変換済み";
 }
 function paint(){if(pixels)ctx.putImageData(pixels,0,0)}
 function drawPalette(){const root=$("palette");root.replaceChildren();palette.forEach((p,i)=>{const b=document.createElement("button");b.className="swatch"+(i===selected?" active":"");b.style.backgroundColor="rgb("+p.join(",")+")";b.setAttribute("aria-label","パレット色 "+(i+1));b.onclick=()=>{selected=i;drawPalette()};root.appendChild(b)})}
