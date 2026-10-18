@@ -19,7 +19,7 @@
 <p id="status" role="status">画像を選ぶと変換できます。</p>
 <div id="toolbox"><label for="brush">タッチ修正</label><select id="brush"><option value="off">オフ</option><option value="draw">描く</option><option value="erase">消しゴム</option></select><button id="undo" class="secondary" disabled>元に戻す</button></div>
 <div id="palette" aria-label="パレット"></div><div class="actions"><button id="save" disabled>原寸PNG</button><button id="save4" disabled>4倍PNG</button><button id="reset" class="secondary" disabled>再変換</button></div>
-<small>パレットから色を選び、「描く」でドットを修正。編集後の保存にも対応。</small><hr><h2>Animation Studio</h2><label for="motion">モーション</label><select id="motion"><option value="bounce">ぽよぽよ</option><option value="sway">ゆらゆら</option><option value="float">ふわふわ</option></select><label for="speed">速さ <output id="speedValue">6</output></label><input id="speed" type="range" min="2" max="12" value="6"><div class="view"><canvas id="animation" width="64" height="64" aria-label="アニメーションプレビュー"></canvas></div><div class="actions"><button id="toggleAnimation">アニメ停止</button><button id="sheet" disabled>8コマ画像を保存</button></div><small>キャラクター全体を動かす初期版です。背景付き画像は背景も一緒に動きます。目や耳の独立アニメーションは今後追加します。</small>
+<small>パレットから色を選び、「描く」でドットを修正。編集後の保存にも対応。</small><hr><h2>Animation Studio</h2><label for="separation">動かす範囲</label><select id="separation"><option value="auto">キャラだけ（背景を推定）</option><option value="all">画像全体</option></select><label for="threshold">背景判定の強さ <output id="thresholdValue">42</output></label><input id="threshold" type="range" min="12" max="100" value="42"><label for="motion">モーション</label><select id="motion"><option value="bounce">ぽよぽよ</option><option value="sway">ゆらゆら</option><option value="float">ふわふわ</option></select><label for="speed">速さ <output id="speedValue">6</output></label><input id="speed" type="range" min="2" max="12" value="6"><div class="view"><canvas id="animation" width="64" height="64" aria-label="アニメーションプレビュー"></canvas></div><div class="actions"><button id="toggleAnimation">アニメ停止</button><button id="sheet" disabled>8コマ画像を保存</button></div><small>キャラクター全体を動かす初期版です。画像の外周から背景を推定します。背景が複雑な場合は切り抜きや背景補完が不正確になることがあります。透過画像なら透過部分を優先します。</small>
 </section></main>
 <script>
 "use strict";
@@ -69,7 +69,7 @@ canvas.width=w;canvas.height=h;pixels=new ImageData(result,w,h);undo=[];paint();
 $("undo").disabled=true;$("save").disabled=$("save4").disabled=$("reset").disabled=$("sheet").disabled=false;
 $("status").textContent=w+" × "+h+"px • "+palette.length+" 色"+(tiny?" • ちび補正ON":"")+" • 端末内で変換済み";
 }
-function paint(){if(pixels)ctx.putImageData(pixels,0,0)}
+function paint(){if(pixels){ctx.putImageData(pixels,0,0);layers=null}}
 function drawPalette(){const root=$("palette");root.replaceChildren();palette.forEach((p,i)=>{const b=document.createElement("button");b.className="swatch"+(i===selected?" active":"");b.style.backgroundColor="rgb("+p.join(",")+")";b.setAttribute("aria-label","パレット色 "+(i+1));b.onclick=()=>{selected=i;drawPalette()};root.appendChild(b)})}
 function at(e){const rect=canvas.getBoundingClientRect(),x=Math.floor((e.clientX-rect.left)*canvas.width/rect.width),y=Math.floor((e.clientY-rect.top)*canvas.height/rect.height);if(x<0||y<0||x>=canvas.width||y>=canvas.height)return;const i=(y*canvas.width+x)*4;
 if($("brush").value==="erase"){pixels.data[i+3]=0}else{const p=palette[selected]||[0,0,0];for(let j=0;j<3;j++)pixels.data[i+j]=p[j];pixels.data[i+3]=255}paint()}
@@ -81,11 +81,51 @@ function download(scale){if(!pixels)return;const c=document.createElement("canva
 
 $("save").onclick=()=>download(1);$("save4").onclick=()=>download(4);
 const anim=$("animation"),ac=anim.getContext("2d"),frame=document.createElement("canvas"),fc=frame.getContext("2d");
-let playing=true,startTime=performance.now();
+let playing=true,startTime=performance.now(),layers=null,layerStamp="";
+function makeLayerCanvas(data,w,h){const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").putImageData(new ImageData(data,w,h),0,0);return c}
+function calculateLayers(){
+if(!pixels)return null;
+const w=canvas.width,h=canvas.height,n=w*h,d=pixels.data,threshold=Number($("threshold").value);
+const transparentCount=(()=>{let n=0;for(let i=3;i<d.length;i+=4)if(d[i]<96)n++;return n})();
+const hasAlpha=transparentCount>n*.005;
+const bg=new Uint8Array(n),queue=new Int32Array(n);let head=0,tail=0;
+function eligible(idx,seed){const p=idx*4;if(d[p+3]<96)return true;if(hasAlpha)return false;const q=seed*4;return Math.hypot(d[p]-d[q],d[p+1]-d[q+1],d[p+2]-d[q+2])<=threshold}
+function start(idx){if(bg[idx])return;bg[idx]=1;queue[tail++]=idx}
+for(let x=0;x<w;x++){if(eligible(x,0))start(x);if(eligible((h-1)*w+x,(h-1)*w))start((h-1)*w+x)}
+for(let y=0;y<h;y++){if(eligible(y*w,y*w))start(y*w);if(eligible(y*w+w-1,y*w+w-1))start(y*w+w-1)}
+const seeds=[0,w-1,(h-1)*w,n-1].map(v=>[d[v*4],d[v*4+1],d[v*4+2]]);
+function isBg(i){const p=i*4;if(d[p+3]<96)return true;if(hasAlpha)return false;return seeds.some(c=>Math.hypot(d[p]-c[0],d[p+1]-c[1],d[p+2]-c[2])<threshold)}
+head=tail=0;bg.fill(0);
+for(let x=0;x<w;x++){if(isBg(x))start(x);if(isBg((h-1)*w+x))start((h-1)*w+x)}
+for(let y=0;y<h;y++){if(isBg(y*w))start(y*w);if(isBg(y*w+w-1))start(y*w+w-1)}
+while(head<tail){const i=queue[head++],x=i%w,y=(i/w)|0;for(const j of [x>0?i-1:-1,x<w-1?i+1:-1,y>0?i-w:-1,y<h-1?i+w:-1])if(j>=0&&!bg[j]&&isBg(j))start(j)}
+const foreground=new Uint8ClampedArray(d),background=new Uint8ClampedArray(d);
+const known=[];for(let i=0;i<n;i++)if(bg[i]&&d[i*4+3]>=96)known.push(i);
+const nearest=new Int32Array(n);nearest.fill(-1);
+head=0;tail=0;
+for(const i of known){nearest[i]=i;queue[tail++]=i}
+while(head<tail){const i=queue[head++],x=i%w,y=(i/w)|0;
+for(const j of [x>0?i-1:-1,x<w-1?i+1:-1,y>0?i-w:-1,y<h-1?i+w:-1]){
+if(j>=0&&nearest[j]===-1){nearest[j]=nearest[i];queue[tail++]=j}
+}}
+for(let i=0;i<n;i++){
+const p=i*4;
+if(bg[i]||d[p+3]<96){foreground[p+3]=0;continue}
+const q=nearest[i]*4;
+if(q>=0){for(let c=0;c<3;c++)background[p+c]=d[q+c];background[p+3]=d[q+3]}
+}
+if(known.length===0){for(let i=0;i<n;i++){background[i*4+3]=0}}
+return {front:makeLayerCanvas(foreground,w,h),back:makeLayerCanvas(background,w,h)};
+}
+function getLayers(){if($("separation").value==="all")return {front:canvas,back:null};const stamp=canvas.width+"x"+canvas.height+"-"+$("threshold").value;if(!layers||layerStamp!==stamp){layers=calculateLayers();layerStamp=stamp}return layers}
+$("threshold").oninput=()=>{$("thresholdValue").textContent=$("threshold").value;layers=null};
+$("separation").onchange=()=>{layers=null;startTime=performance.now()};
 function drawMotion(target,phase,mode,base){
 const w=base.width,h=base.height,targetCtx=target.getContext("2d");
 targetCtx.clearRect(0,0,target.width,target.height);
 targetCtx.imageSmoothingEnabled=false;
+const parts=getLayers();if(parts&&parts.back)targetCtx.drawImage(parts.back,0,0);
+base=parts?parts.front:base;
 let dx=0,dy=0,angle=0;
 if(mode==="bounce")dy=-Math.round((1-Math.cos(phase*2*Math.PI))*Math.max(1,h*.035));
 if(mode==="float")dy=Math.round(Math.sin(phase*2*Math.PI)*Math.max(1,h*.035));
