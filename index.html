@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>pico. — Pixel Studio</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;color-scheme:dark;background:#151624;color:#f5f2ff}*{box-sizing:border-box}body{max-width:1020px;padding:18px;margin:auto}h1{margin:0;font-size:2.2rem}p{color:#bfc0d2;line-height:1.5}header{margin-bottom:16px}main{display:grid;grid-template-columns:minmax(245px,340px) minmax(0,1fr);gap:16px}@media(max-width:710px){main{grid-template-columns:1fr}}section{background:#22243a;border:1px solid #393c59;border-radius:18px;padding:17px;min-width:0}label{display:block;font-weight:650;margin:12px 0 5px}input[type=range],select{width:100%}select{background:#343650;color:white;padding:10px;border-radius:8px;border:1px solid #515574}button,.upload{background:#ad9cff;color:#17102d;border:0;border-radius:12px;padding:11px 14px;font-weight:700;font-size:15px;cursor:pointer}.upload{display:inline-block}.upload input{display:none}button:disabled{opacity:.4}.actions,.presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.presets button{background:#44466a;color:white}button.secondary{background:#3a3d57;color:white}.view{position:relative;width:100%;max-width:600px;margin:auto;overflow:hidden;border-radius:12px;touch-action:none;background:repeating-conic-gradient(#777 0 25%,#aaa 0 50%) 0/24px 24px}canvas{display:block;width:100%;height:auto;image-rendering:pixelated;touch-action:none}small{color:#aaaec8}output{font-variant-numeric:tabular-nums;color:#ded6ff}#palette{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.swatch{width:26px;height:26px;min-width:26px;padding:0;border:2px solid #aaa;box-shadow:inset 0 0 0 1px #0004}.swatch.active{outline:2px solid white;outline-offset:2px}#status{min-height:23px}#toolbox{display:flex;gap:10px;flex-wrap:wrap;align-items:center}#toolbox select{width:auto}a{color:#cec7ff}
+</style></head><body>
+<header><h1>pico. ✦</h1><p>イラストをゲーム用スプライトに。減色・細部保護・ドット単位の修正まで、画像は端末内で処理。</p></header>
+<main><section>
+<label class="upload">画像を読み込む<input id="file" type="file" accept="image/*"></label>
+<div class="presets"><button data-preset="character">キャラクター</button><button data-preset="retro">レトロ</button><button data-preset="soft">やわらか</button></div>
+<label for="size">長辺 <output id="sizeValue">64</output>px</label><input id="size" type="range" min="16" max="192" value="64" step="8">
+<label for="colors">パレット <output id="colorsValue">20</output>色</label><input id="colors" type="range" min="4" max="48" value="20">
+<label for="detail">細部の保持 <output id="detailValue">65</output>%</label><input id="detail" type="range" min="0" max="100" value="65">
+<label for="contrast">色のメリハリ <output id="contrastValue">14</output>%</label><input id="contrast" type="range" min="0" max="50" value="14">
+<label for="dither">ディザ</label><select id="dither"><option value="off">なし（キャラ向け）</option><option value="ordered">控えめ</option><option value="strong">レトロ</option></select>
+<label for="outline">輪郭補強</label><select id="outline"><option value="soft">弱め</option><option value="none">なし</option><option value="bold">強め</option></select>
+<small>※ 顔パーツを認識するAIではありません。画像の局所コントラストを利用して、細い線を残しやすくします。</small>
+</section><section><h2>プレビュー</h2>
+<div class="view"><canvas id="preview" width="64" height="64" aria-label="ドット絵プレビュー"></canvas></div>
+<p id="status" role="status">画像を選ぶと変換できます。</p>
+<div id="toolbox"><label for="brush">タッチ修正</label><select id="brush"><option value="off">オフ</option><option value="draw">描く</option><option value="erase">消しゴム</option></select><button id="undo" class="secondary" disabled>元に戻す</button></div>
+<div id="palette" aria-label="パレット"></div><div class="actions"><button id="save" disabled>原寸PNG</button><button id="save4" disabled>4倍PNG</button><button id="reset" class="secondary" disabled>再変換</button></div>
+<small>パレットから色を選び、「描く」でドットを修正。編集後の保存にも対応。</small>
+</section></main>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const canvas=$("preview"),ctx=canvas.getContext("2d",{willReadFrequently:true});
+const source=new Image();let ready=false, pixels=null, undo=[], palette=[], selected=0,painting=false,activeURL=null;
+const clamp=v=>Math.max(0,Math.min(255,Math.round(v)));
+const controls=["size","colors","detail","contrast","dither","outline"];
+const presets={character:{size:64,colors:20,detail:75,contrast:18,dither:"off",outline:"soft"},retro:{size:48,colors:12,detail:50,contrast:26,dither:"strong",outline:"bold"},soft:{size:96,colors:32,detail:45,contrast:8,dither:"off",outline:"none"}};
+document.querySelectorAll("[data-preset]").forEach(b=>b.onclick=()=>{Object.assign($("size"),{value:presets[b.dataset.preset].size});for(const [k,v] of Object.entries(presets[b.dataset.preset]))$(k).value=v;render()});
+$("file").onchange=e=>{const f=e.target.files?.[0];if(!f)return;if(activeURL)URL.revokeObjectURL(activeURL);activeURL=URL.createObjectURL(f);source.onload=()=>{ready=true;render()};source.onerror=()=>{$("status").textContent="画像を読み込めませんでした。";ready=false};source.src=activeURL};
+controls.forEach(id=>$(id).addEventListener("input",render));
+function nearestColors(rgb,pal){let result=0,min=Infinity;for(let i=0;i<pal.length;i++){const p=pal[i];const dr=rgb[0]-p[0],dg=rgb[1]-p[1],db=rgb[2]-p[2];const d=dr*dr*.29+dg*dg*.59+db*db*.12;if(d<min){min=d;result=i}}return result}
+function makePalette(data,k){const samples=[];for(let i=0;i<data.length;i+=4)if(data[i+3]>=120)samples.push([data[i],data[i+1],data[i+2]]);
+if(!samples.length)return [[0,0,0]];
+const unique=new Map();for(let i=0;i<samples.length;i++){const c=samples[i],key=((c[0]>>3)<<10)|((c[1]>>3)<<5)|(c[2]>>3);if(!unique.has(key))unique.set(key,{rgb:c.slice(),n:0});unique.get(key).n++}
+const sorted=[...unique.values()].sort((a,b)=>b.n-a.n);const centers=sorted.slice(0,Math.min(k,sorted.length)).map(x=>x.rgb.slice());const stride=Math.max(1,Math.floor(samples.length/16000));
+for(let iter=0;iter<8;iter++){const acc=centers.map(()=>[0,0,0,0]);for(let i=0;i<samples.length;i+=stride){const c=samples[i],j=nearestColors(c,centers),a=acc[j];a[0]+=c[0];a[1]+=c[1];a[2]+=c[2];a[3]++}for(let j=0;j<centers.length;j++)if(acc[j][3])for(let q=0;q<3;q++)centers[j][q]=clamp(acc[j][q]/acc[j][3])}
+return centers;
+}
+function render(){
+for(const key of ["size","colors","detail","contrast"])$(key+"Value").textContent=$(key).value;
+if(!ready||!source.naturalWidth)return;
+const size=+$("size").value,detail=+$("detail").value/100,contrast=+$("contrast").value/100;
+const aspect=source.naturalWidth/source.naturalHeight;
+const w=aspect>=1?size:Math.max(1,Math.round(size*aspect)),h=aspect>=1?Math.max(1,Math.round(size/aspect)):size;
+const hi=document.createElement("canvas");hi.width=w*3;hi.height=h*3;const hc=hi.getContext("2d",{willReadFrequently:true});hc.imageSmoothingQuality="high";hc.drawImage(source,0,0,hi.width,hi.height);
+const HD=hc.getImageData(0,0,hi.width,hi.height).data;
+const low=document.createElement("canvas");low.width=w;low.height=h;const lc=low.getContext("2d",{willReadFrequently:true});lc.imageSmoothingQuality="high";lc.drawImage(source,0,0,w,h);const lowData=lc.getImageData(0,0,w,h).data;
+const d=new Uint8ClampedArray(lowData);
+for(let y=0;y<h;y++)for(let x=0;x<w;x++){const j=(y*w+x)*4;
+let sum=[0,0,0],min=[255,255,255],max=[0,0,0],n=0,alpha=0;
+for(let yy=0;yy<3;yy++)for(let xx=0;xx<3;xx++){const i=((y*3+yy)*hi.width+x*3+xx)*4,a=HD[i+3]/255;if(a<.25)continue;n++;alpha+=a;for(let c=0;c<3;c++){sum[c]+=HD[i+c];min[c]=Math.min(min[c],HD[i+c]);max[c]=Math.max(max[c],HD[i+c])}}
+if(n===0){d[j+3]=0;continue}d[j+3]=alpha/n>0.45?255:0;
+for(let c=0;c<3;c++){const avg=sum[c]/n;let value=avg;if(detail>0){const mid=HD[((y*3+1)*hi.width+x*3+1)*4+c];const edge=max[c]-min[c];const weight=detail*Math.min(1,edge/110);value=avg*(1-weight)+mid*weight}d[j+c]=clamp((value-127.5)*(1+contrast)+127.5)}}
+palette=makePalette(d,+$("colors").value);
+const matrix=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]],amount=$("dither").value==="strong"?12:$("dither").value==="ordered"?4:0;
+const result=new Uint8ClampedArray(d);
+for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4;if(d[i+3]===0){result[i+3]=0;continue}const q=(matrix[y%4][x%4]-7.5)*amount/8;
+const c=[clamp(d[i]+q),clamp(d[i+1]+q),clamp(d[i+2]+q)],p=palette[nearestColors(c,palette)];
+for(let z=0;z<3;z++)result[i+z]=p[z]}
+if($("outline").value!=="none"){const before=result.slice(),factor=$("outline").value==="bold"?.48:.72;
+for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4;if(!before[i+3])continue;
+const edge= (x===0||x===w-1||y===0||y===h-1)||[[x-1,y],[x+1,y],[x,y-1],[x,y+1]].some(([xx,yy])=>before[(yy*w+xx)*4+3]===0);
+if(edge){for(let c=0;c<3;c++)result[i+c]=clamp(before[i+c]*factor)}}}
+canvas.width=w;canvas.height=h;pixels=new ImageData(result,w,h);undo=[];paint();drawPalette();
+$("undo").disabled=true;$("save").disabled=$("save4").disabled=$("reset").disabled=false;
+$("status").textContent=w+" × "+h+"px • "+palette.length+" 色 • 端末内で変換済み";
+}
+function paint(){if(pixels)ctx.putImageData(pixels,0,0)}
+function drawPalette(){const root=$("palette");root.replaceChildren();palette.forEach((p,i)=>{const b=document.createElement("button");b.className="swatch"+(i===selected?" active":"");b.style.backgroundColor="rgb("+p.join(",")+")";b.setAttribute("aria-label","パレット色 "+(i+1));b.onclick=()=>{selected=i;drawPalette()};root.appendChild(b)})}
+function at(e){const rect=canvas.getBoundingClientRect(),x=Math.floor((e.clientX-rect.left)*canvas.width/rect.width),y=Math.floor((e.clientY-rect.top)*canvas.height/rect.height);if(x<0||y<0||x>=canvas.width||y>=canvas.height)return;const i=(y*canvas.width+x)*4;
+if($("brush").value==="erase"){pixels.data[i+3]=0}else{const p=palette[selected]||[0,0,0];for(let j=0;j<3;j++)pixels.data[i+j]=p[j];pixels.data[i+3]=255}paint()}
+canvas.addEventListener("pointerdown",e=>{if(!pixels||$("brush").value==="off")return;e.preventDefault();undo.push(new Uint8ClampedArray(pixels.data));if(undo.length>20)undo.shift();$("undo").disabled=false;painting=true;canvas.setPointerCapture(e.pointerId);at(e)});
+canvas.addEventListener("pointermove",e=>{if(painting)at(e)});["pointerup","pointercancel","lostpointercapture"].forEach(t=>canvas.addEventListener(t,()=>painting=false));
+$("undo").onclick=()=>{if(!undo.length||!pixels)return;pixels.data.set(undo.pop());paint();$("undo").disabled=undo.length===0};
+$("reset").onclick=render;
+function download(scale){if(!pixels)return;const c=document.createElement("canvas");c.width=canvas.width*scale;c.height=canvas.height*scale;const q=c.getContext("2d");q.imageSmoothingEnabled=false;q.drawImage(canvas,0,0,c.width,c.height);c.toBlob(blob=>{if(!blob)return;const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="pico-"+canvas.width+"x"+canvas.height+(scale===1?"":"-4x")+".png";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000)},"image/png")}
+$("save").onclick=()=>download(1);$("save4").onclick=()=>download(4);
+</script></body></html>
